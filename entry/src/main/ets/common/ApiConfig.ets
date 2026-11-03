@@ -4,7 +4,7 @@
  */
 export class ApiConfig {
   /** 完整的 API 基础地址，例如部署后的 HTTPS 域名。 */
-  static readonly baseUrl: string = 'http://101.37.237.234';
+  static readonly baseUrl: string = 'https://dakaapp.top';
 
   /** 也可以分别填写主机和端口；baseUrl 为空时才会使用这两项。 */
   static readonly host: string = '';

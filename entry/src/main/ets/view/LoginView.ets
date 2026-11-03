@@ -13,8 +13,9 @@ const MODE_REGISTER: string = 'register';
 @Component
 export struct LoginView {
   @Prop serverMode: boolean = false;
-  onLogin: (id: string) => Promise<boolean> = async () => false;
-  onRegister: (nickname: string, role: string) => Promise<LocalAccount> = async () => new LocalAccount();
+  onLogin: (id: string, password: string) => Promise<boolean> = async () => false;
+  onRegister: (nickname: string, role: string, password: string) => Promise<LocalAccount> =
+    async () => new LocalAccount();
   onEnter: (id: string) => Promise<boolean> = async () => false;
   onMessage: (message: string) => void = () => {
   };
@@ -23,6 +24,8 @@ export struct LoginView {
 
   @State mode: string = MODE_LOGIN;
   @State loginId: string = '';
+  @State password: string = '';
+  @State confirmPassword: string = '';
   @State nickname: string = '';
   @State role: string = ROLE_STUDENT;
   @State registered: boolean = false;
@@ -47,10 +50,14 @@ export struct LoginView {
       this.toast('请输入登录 ID');
       return;
     }
+    if (this.password.length === 0) {
+      this.toast('请输入密码');
+      return;
+    }
     this.busy = true;
     try {
-      if (!await this.onLogin(id)) {
-        this.onMessage('登录失败，请检查 ID 或网络连接');
+      if (!await this.onLogin(id, this.password)) {
+        this.onMessage('登录失败，请检查 ID、密码或网络连接');
       }
     } finally {
       this.busy = false;
@@ -66,9 +73,21 @@ export struct LoginView {
       this.toast('请输入昵称');
       return;
     }
+    if (this.password.length < 8) {
+      this.toast('密码至少需要 8 位');
+      return;
+    }
+    if (this.password.length > 64) {
+      this.toast('密码不能超过 64 位');
+      return;
+    }
+    if (this.password !== this.confirmPassword) {
+      this.toast('两次输入的密码不一致');
+      return;
+    }
     this.busy = true;
     try {
-      const account: LocalAccount = await this.onRegister(name, this.role);
+      const account: LocalAccount = await this.onRegister(name, this.role, this.password);
       if (account.id.length === 0) {
         this.onMessage('注册失败，请稍后重试');
         return;
@@ -161,6 +180,28 @@ export struct LoginView {
           this.loginId = value.toUpperCase();
         })
 
+      Text('密码')
+        .fontSize(12)
+        .fontColor(AppColor.textSub)
+        .margin({ top: 14, bottom: 7 })
+
+      TextInput({ placeholder: '请输入密码', text: this.password })
+        .type(InputType.Password)
+        .height(44)
+        .fontSize(15)
+        .backgroundColor('#F5F7F9')
+        .borderRadius(AppSize.radiusInner)
+        .placeholderColor(AppColor.textWeak)
+        .maxLength(64)
+        .onChange((value: string) => {
+          this.password = value;
+        })
+
+      Text('密码遗失后无法找回，请牢记密码')
+        .fontSize(10)
+        .fontColor(AppColor.textWeak)
+        .margin({ top: 7 })
+
       Button(this.busy ? '登录中...' : '登录')
         .fontSize(14)
         .fontColor(Color.White)
@@ -207,6 +248,41 @@ export struct LoginView {
       }
       .width('100%')
 
+      Text('设置密码')
+        .fontSize(12)
+        .fontColor(AppColor.textSub)
+        .margin({ top: 14, bottom: 7 })
+
+      TextInput({ placeholder: '至少 8 位，最多 64 位', text: this.password })
+        .type(InputType.Password)
+        .height(44)
+        .fontSize(15)
+        .backgroundColor('#F5F7F9')
+        .borderRadius(AppSize.radiusInner)
+        .placeholderColor(AppColor.textWeak)
+        .maxLength(64)
+        .onChange((value: string) => {
+          this.password = value;
+        })
+
+      TextInput({ placeholder: '再次输入密码', text: this.confirmPassword })
+        .type(InputType.Password)
+        .height(44)
+        .fontSize(15)
+        .backgroundColor('#F5F7F9')
+        .borderRadius(AppSize.radiusInner)
+        .placeholderColor(AppColor.textWeak)
+        .maxLength(64)
+        .margin({ top: 8 })
+        .onChange((value: string) => {
+          this.confirmPassword = value;
+        })
+
+      Text('密码遗失后账户无法找回，请务必牢记')
+        .fontSize(10)
+        .fontColor(AppColor.danger)
+        .margin({ top: 7 })
+
       Button({ type: ButtonType.Capsule }) {
         Row() {
           AppIcon({ commands: IconPath.plus, iconSize: 16, color: Color.White, strokeW: 2 })
@@ -248,7 +324,7 @@ export struct LoginView {
         .fontColor(AppColor.textMain)
         .margin({ top: 12 })
 
-      Text('请记住你的登录 ID')
+      Text('请同时记住你的登录 ID 和密码')
         .fontSize(12)
         .fontColor(AppColor.textSub)
         .margin({ top: 6 })
@@ -259,7 +335,7 @@ export struct LoginView {
         .fontColor(AppColor.primary)
         .margin({ top: 18 })
 
-      Text('以后需要用这个 ID 登录，丢失后暂时无法找回。')
+      Text('登录 ID 或密码遗失后无法找回，请立即妥善记录。')
         .fontSize(11)
         .fontColor(AppColor.textWeak)
         .textAlign(TextAlign.Center)

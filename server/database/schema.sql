@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
   login_id VARCHAR(16) NOT NULL,
   nickname VARCHAR(50) NOT NULL DEFAULT '',
   role VARCHAR(16) NOT NULL DEFAULT 'student',
+  password_hash VARCHAR(255) NOT NULL,
   avatar_url VARCHAR(1024) NOT NULL DEFAULT '',
   timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai',
   status TINYINT NOT NULL DEFAULT 1,

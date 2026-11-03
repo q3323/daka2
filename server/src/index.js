@@ -11,6 +11,7 @@ const cors = require('cors');
 const authRoutes = require('./routes/auth');
 const classRoutes = require('./routes/classes');
 const checkInRoutes = require('./routes/checkIns');
+const planRoutes = require('./routes/plans');
 
 const app = express();
 app.disable('x-powered-by');
@@ -24,6 +25,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/classes', classRoutes);
 app.use('/api/check-ins', checkInRoutes);
+app.use('/api/plans', planRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: '接口不存在' });

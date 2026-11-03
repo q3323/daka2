@@ -36,6 +36,8 @@ Run `database/migrations/004_add_check_in_task_id.sql` if check-ins do not have
 the task link yet.
 Run `database/migrations/005_switch_to_login_id.sql` before switching an old
 database to ID-only login.
+Run `database/migrations/006_add_password_hash.sql` before enabling password
+login. Existing accounts do not have a password and must register again.
 
 ## Start
 
@@ -71,13 +73,16 @@ DELETE /api/classes/:classId/members/:memberId
 POST   /api/check-ins
 GET    /api/check-ins
 GET    /api/check-ins/:checkInId/photo
+POST   /api/plans/normalize
 ```
 
 Authentication uses `Authorization: Bearer <token>`.
 
-ID-only login is a temporary development mode. Anyone who knows a login ID can
-log in, so add a password, device binding, or another verification factor before
-production release.
+Passwords are stored as salted `scrypt` hashes. Passwords cannot be recovered;
+users must remember both their login ID and password.
+
+The plan normalizer accepts AI-generated text, extracts a JSON object, and
+returns only validated `add` or `update` operations. It never deletes plans.
 
 The first backend version stores check-in photos in MySQL as `LONGBLOB` so the
 upload flow can be tested before OBS is ready. Move photo bytes to OBS and keep

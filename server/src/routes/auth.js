@@ -2,11 +2,28 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const pool = require('../db');
 const { signToken, requireAuth } = require('../auth');
+const { hashPassword, verifyPassword } = require('../password');
 const { asyncHandler, cleanText } = require('../utils');
 
 const router = express.Router();
 const LOGIN_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const LOGIN_ID_PATTERN = /^DK-[A-Z2-9]{6}$/;
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 64;
+
+function passwordError(value) {
+  if (typeof value !== 'string') {
+    return '请输入密码';
+  }
+  const length = Array.from(value).length;
+  if (length < PASSWORD_MIN_LENGTH) {
+    return `密码至少需要 ${PASSWORD_MIN_LENGTH} 位`;
+  }
+  if (length > PASSWORD_MAX_LENGTH) {
+    return `密码不能超过 ${PASSWORD_MAX_LENGTH} 位`;
+  }
+  return '';
+}
 
 function createLoginIdCandidate() {
   let value = 'DK-';
@@ -33,15 +50,21 @@ async function generateLoginId() {
 router.post('/register-id', asyncHandler(async (req, res) => {
   const nickname = cleanText(req.body.nickname, 50);
   const role = req.body.role === 'teacher' ? 'teacher' : 'student';
+  const password = req.body.password;
   if (nickname.length === 0) {
     return res.status(400).json({ message: '请输入昵称' });
+  }
+  const invalidPassword = passwordError(password);
+  if (invalidPassword) {
+    return res.status(400).json({ message: invalidPassword });
   }
 
   const id = randomUUID();
   const loginId = await generateLoginId();
+  const passwordHash = await hashPassword(password);
   await pool.execute(
-    'INSERT INTO users (id, login_id, nickname, role) VALUES (?, ?, ?, ?)',
-    [id, loginId, nickname, role]
+    'INSERT INTO users (id, login_id, nickname, role, password_hash) VALUES (?, ?, ?, ?, ?)',
+    [id, loginId, nickname, role, passwordHash]
   );
 
   return res.status(201).json({
@@ -52,20 +75,29 @@ router.post('/register-id', asyncHandler(async (req, res) => {
 
 router.post('/login-id', asyncHandler(async (req, res) => {
   const loginId = cleanText(req.body.loginId, 16).toUpperCase();
+  const password = req.body.password;
   if (!LOGIN_ID_PATTERN.test(loginId)) {
     return res.status(400).json({ message: '登录 ID 格式不正确' });
   }
+  const invalidPassword = passwordError(password);
+  if (invalidPassword) {
+    return res.status(400).json({ message: invalidPassword });
+  }
 
   const [rows] = await pool.execute(
-    `SELECT id, login_id AS loginId, nickname, role, status, deleted_at
+    `SELECT id, login_id AS loginId, nickname, role, password_hash AS passwordHash,
+            status, deleted_at
      FROM users
      WHERE login_id = ?
      LIMIT 1`,
     [loginId]
   );
   const user = rows[0];
-  if (!user || user.status !== 1 || user.deleted_at) {
-    return res.status(401).json({ message: 'ID 不存在' });
+  const passwordMatches = user
+    ? await verifyPassword(password, user.passwordHash)
+    : false;
+  if (!user || user.status !== 1 || user.deleted_at || !passwordMatches) {
+    return res.status(401).json({ message: 'ID 或密码错误' });
   }
 
   await pool.execute(

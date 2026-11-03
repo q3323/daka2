@@ -3,23 +3,56 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppIcon } from '../common/AppIcon';
 import { IconPath } from '../common/IconPath';
 import { AppColor, AppSize } from '../common/Theme';
-import { AiChatMessage, AiChatResult, AiClient } from '../model/AiClient';
+import {
+  AiChatMessage,
+  AiChatResult,
+  AiClient,
+  AiPlanChange,
+  AiPlanContext,
+  AiPlanProposal
+} from '../model/AiClient';
+import { ApiClient, ApiResult } from '../model/ApiClient';
+import { PlanItem } from '../model/DakaModel';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'AIView';
+
+class ApiMessageBody {
+  message: string = '';
+}
+
+class AiPlanProposalEnvelope {
+  proposal: AiPlanProposal = new AiPlanProposal();
+}
+
+class NormalizePlanResult {
+  ok: boolean = false;
+  message: string = '';
+  proposal: AiPlanProposal = new AiPlanProposal();
+}
 
 @Component
 export struct AIView {
   @Link baseUrl: string;
   @Link apiKey: string;
   @Link model: string;
+  @Link plans: PlanItem[];
+  @Prop authToken: string = '';
+  @Prop initialMessages: AiChatMessage[] = [];
+  onMessagesChanged: (messages: AiChatMessage[]) => void = () => {
+  };
+  onApplyPlanChanges: (changes: AiPlanChange[]) => void = () => {
+  };
 
   @State messages: AiChatMessage[] = [];
   @State draft: string = '';
   @State sending: boolean = false;
   @State showSettings: boolean = true;
+  @State planMode: boolean = false;
+  @State pendingProposal: AiPlanProposal = new AiPlanProposal();
 
   aboutToAppear(): void {
+    this.messages = this.initialMessages.slice();
     this.showSettings = this.baseUrl.length === 0
       || this.apiKey.length === 0
       || this.model.length === 0;
@@ -45,6 +78,112 @@ export struct AIView {
     this.toast('接口配置已保存，仅当前 App 会话有效');
   }
 
+  private appendAssistant(content: string): void {
+    const next: AiChatMessage[] = this.messages.slice();
+    next.push(new AiChatMessage('assistant', content));
+    this.messages = next;
+    this.onMessagesChanged(next);
+  }
+
+  private confirmClearMemory(): void {
+    this.getUIContext().showAlertDialog({
+      title: '清除 AI 对话记录？',
+      message: '只会删除当前账号保存在本机的 AI 对话，不影响服务器数据和打卡计划。',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '清除',
+        fontColor: AppColor.danger,
+        action: () => {
+          this.messages = [];
+          this.pendingProposal = new AiPlanProposal();
+          this.onMessagesChanged([]);
+          this.toast('本地 AI 对话已清除');
+        }
+      }
+    });
+  }
+
+  private planContexts(): AiPlanContext[] {
+    const contexts: AiPlanContext[] = [];
+    for (let i = 0; i < this.plans.length; i++) {
+      const plan: PlanItem = this.plans[i];
+      const context: AiPlanContext = new AiPlanContext();
+      context.planId = plan.id;
+      context.name = plan.name;
+      context.timesPerDay = plan.timesPerDay;
+      context.totalDays = plan.totalDays;
+      context.remark = plan.remark;
+      contexts.push(context);
+    }
+    return contexts;
+  }
+
+  private planIds(): string[] {
+    const ids: string[] = [];
+    for (let i = 0; i < this.plans.length; i++) {
+      ids.push(this.plans[i].id);
+    }
+    return ids;
+  }
+
+  private apiMessage(result: ApiResult): string {
+    if (result.body.length > 0) {
+      try {
+        const parsed: ApiMessageBody = JSON.parse(result.body) as ApiMessageBody;
+        if (parsed.message !== undefined && parsed.message.length > 0) {
+          return parsed.message;
+        }
+      } catch (err) {
+        hilog.warn(DOMAIN, TAG, 'failed to parse plan API message');
+      }
+    }
+    return result.message;
+  }
+
+  private async normalizeProposal(content: string): Promise<NormalizePlanResult> {
+    const normalized: NormalizePlanResult = new NormalizePlanResult();
+    const response: ApiResult = await ApiClient.normalizeAiPlanProposal(
+      content,
+      this.planIds(),
+      this.authToken
+    );
+    if (!response.ok) {
+      normalized.message = this.apiMessage(response);
+      return normalized;
+    }
+    try {
+      const parsed: AiPlanProposalEnvelope =
+        JSON.parse(response.body) as AiPlanProposalEnvelope;
+      if (parsed.proposal === undefined
+        || parsed.proposal.plans === undefined
+        || !Array.isArray(parsed.proposal.plans)
+        || parsed.proposal.plans.length === 0) {
+        normalized.message = '计划数据为空';
+        return normalized;
+      }
+      normalized.ok = true;
+      normalized.proposal = parsed.proposal;
+      return normalized;
+    } catch (err) {
+      normalized.message = '无法读取计划数据';
+      return normalized;
+    }
+  }
+
+  private proposalText(proposal: AiPlanProposal): string {
+    let text: string = proposal.summary;
+    for (let i = 0; i < proposal.plans.length; i++) {
+      const plan: AiPlanChange = proposal.plans[i];
+      const action: string = plan.action === 'update' ? '修改' : '新增';
+      text += `\n${action}：${plan.name} · 每天 ${plan.timesPerDay} 次 · ${plan.totalDays} 天`;
+    }
+    return text;
+  }
+
   private async send(): Promise<void> {
     if (this.sending) {
       return;
@@ -60,31 +199,77 @@ export struct AIView {
       this.toast('请先配置 AI 接口');
       return;
     }
+    if (this.planMode && this.authToken.length === 0) {
+      this.toast('计划编辑需要先登录服务器账户');
+      return;
+    }
 
     const userMessage: AiChatMessage = new AiChatMessage('user', text);
     const withUser: AiChatMessage[] = this.messages.slice();
     withUser.push(userMessage);
     this.messages = withUser;
+    this.onMessagesChanged(withUser);
     this.draft = '';
     this.sending = true;
 
     const history: AiChatMessage[] = withUser.slice();
-    if (history.length > 12) {
-      history.splice(0, history.length - 12);
+    if (history.length > 24) {
+      history.splice(0, history.length - 24);
     }
-    const result: AiChatResult = await AiClient.chat(
-      this.baseUrl.trim(),
-      this.apiKey.trim(),
-      this.model.trim(),
-      history
-    );
-    const reply: string = result.ok
-      ? result.content
-      : `请求失败：${result.message}`;
-    const next: AiChatMessage[] = this.messages.slice();
-    next.push(new AiChatMessage('assistant', reply));
-    this.messages = next;
+    if (this.planMode) {
+      const contexts: AiPlanContext[] = this.planContexts();
+      const result: AiChatResult = await AiClient.chatForPlan(
+        this.baseUrl.trim(),
+        this.apiKey.trim(),
+        this.model.trim(),
+        history,
+        contexts
+      );
+      if (!result.ok) {
+        this.appendAssistant(`计划生成失败：${result.message}`);
+      } else {
+        let normalized: NormalizePlanResult = await this.normalizeProposal(result.content);
+        if (!normalized.ok) {
+          const repaired: AiChatResult = await AiClient.repairPlan(
+            this.baseUrl.trim(),
+            this.apiKey.trim(),
+            this.model.trim(),
+            result.content,
+            contexts
+          );
+          if (repaired.ok) {
+            normalized = await this.normalizeProposal(repaired.content);
+          }
+        }
+        if (normalized.ok) {
+          this.pendingProposal = normalized.proposal;
+          this.appendAssistant(this.proposalText(normalized.proposal));
+        } else {
+          this.appendAssistant(`计划格式校验失败：${normalized.message}`);
+        }
+      }
+    } else {
+      const result: AiChatResult = await AiClient.chat(
+        this.baseUrl.trim(),
+        this.apiKey.trim(),
+        this.model.trim(),
+        history
+      );
+      const reply: string = result.ok
+        ? result.content
+        : `请求失败：${result.message}`;
+      this.appendAssistant(reply);
+    }
     this.sending = false;
+  }
+
+  private applyPendingProposal(): void {
+    if (this.pendingProposal.plans.length === 0) {
+      return;
+    }
+    this.onApplyPlanChanges(this.pendingProposal.plans);
+    this.pendingProposal = new AiPlanProposal();
+    this.toast('计划已更新');
   }
 
   @Builder
@@ -198,6 +383,75 @@ export struct AIView {
     .margin({ bottom: AppSize.gap })
   }
 
+  @Builder
+  planProposalCard() {
+    Column() {
+      Row() {
+        Column() {
+          Text('待应用的计划')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColor.textMain)
+          Text(this.pendingProposal.summary)
+            .fontSize(11)
+            .fontColor(AppColor.textSub)
+            .margin({ top: 4 })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Text(`${this.pendingProposal.plans.length} 项`)
+          .fontSize(11)
+          .fontColor(AppColor.primary)
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+          .backgroundColor(AppColor.primarySoft)
+          .borderRadius(4)
+      }
+      .width('100%')
+
+      Column() {
+        ForEach(this.pendingProposal.plans, (plan: AiPlanChange) => {
+          Row() {
+            Text(plan.action === 'update' ? '修改' : '新增')
+              .fontSize(10)
+              .fontColor(plan.action === 'update' ? AppColor.info : AppColor.primary)
+              .width(38)
+            Text(plan.name)
+              .fontSize(12)
+              .fontColor(AppColor.textMain)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`每天 ${plan.timesPerDay} 次 · ${plan.totalDays} 天`)
+              .fontSize(10)
+              .fontColor(AppColor.textSub)
+          }
+          .width('100%')
+          .padding({ top: 7, bottom: 7 })
+        }, (plan: AiPlanChange, index: number) => `${index}_${plan.planId}_${plan.name}`)
+      }
+      .width('100%')
+      .margin({ top: 6 })
+
+      Button('应用这些计划')
+        .fontSize(12)
+        .fontColor(Color.White)
+        .height(38)
+        .width('100%')
+        .backgroundColor(AppColor.primary)
+        .margin({ top: 10 })
+        .onClick(() => {
+          this.applyPendingProposal();
+        })
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor(AppColor.card)
+    .borderRadius(AppSize.radiusCard)
+    .alignItems(HorizontalAlign.Start)
+    .margin({ top: 4, bottom: AppSize.gap })
+  }
+
   build() {
     Column() {
       Row() {
@@ -206,13 +460,26 @@ export struct AIView {
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor(AppColor.textMain)
-          Text('给出学习与计划建议，不会修改你的计划')
+          Text('生成学习建议，确认后可直接更新计划')
             .fontSize(11)
             .fontColor(AppColor.textSub)
             .margin({ top: 4 })
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
+
+        if (this.messages.length > 0) {
+          Button({ type: ButtonType.Circle }) {
+            AppIcon({ commands: IconPath.trash, iconSize: 14, color: AppColor.danger, strokeW: 1.8 })
+          }
+          .width(34)
+          .height(34)
+          .backgroundColor(AppColor.dangerSoft)
+          .margin({ right: 8 })
+          .onClick(() => {
+            this.confirmClearMemory();
+          })
+        }
 
         Button({ type: ButtonType.Capsule }) {
           Row() {
@@ -236,6 +503,31 @@ export struct AIView {
         this.settingsCard()
       }
 
+      Row() {
+        Column() {
+          Text('计划编辑模式')
+            .fontSize(12)
+            .fontColor(AppColor.textMain)
+          Text(this.planMode ? 'AI 将生成可应用的计划 JSON' : '普通对话模式')
+            .fontSize(10)
+            .fontColor(AppColor.textSub)
+            .margin({ top: 2 })
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.planMode })
+          .selectedColor(AppColor.primary)
+          .onChange((isOn: boolean) => {
+            this.planMode = isOn;
+          })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor(AppColor.card)
+      .borderRadius(AppSize.radiusInner)
+      .margin({ bottom: AppSize.gap })
+
       Scroll() {
         Column() {
           if (this.messages.length === 0) {
@@ -253,7 +545,7 @@ export struct AIView {
                 .fontSize(14)
                 .fontColor(AppColor.textMain)
                 .margin({ top: 12 })
-              Text('可以问学习规划、数据分析或项目复盘建议')
+              Text(this.planMode ? '描述你想制定或调整的打卡计划' : '可以问学习规划、数据分析或项目复盘建议')
                 .fontSize(11)
                 .fontColor(AppColor.textSub)
                 .margin({ top: 5 })
@@ -275,6 +567,10 @@ export struct AIView {
               .width('100%')
               .padding({ top: 6, bottom: 10 })
             }
+          }
+
+          if (this.pendingProposal.plans.length > 0) {
+            this.planProposalCard()
           }
         }
         .width('100%')
@@ -314,7 +610,9 @@ export struct AIView {
         .width('100%')
         .alignItems(VerticalAlign.Bottom)
 
-        Text('AI 只提供建议，不会修改计划或写入打卡数据')
+        Text(this.planMode
+          ? '计划只会显示为提案，点击“应用这些计划”后才会写入'
+          : '对话记录仅保存在本机的当前账号')
           .fontSize(9)
           .fontColor(AppColor.textWeak)
           .width('100%')

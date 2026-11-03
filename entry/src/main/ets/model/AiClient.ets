@@ -21,6 +21,28 @@ export class AiChatResult {
   content: string = '';
 }
 
+export class AiPlanContext {
+  planId: string = '';
+  name: string = '';
+  timesPerDay: number = 1;
+  totalDays: number = 7;
+  remark: string = '';
+}
+
+export class AiPlanChange {
+  action: string = 'add';
+  planId: string = '';
+  name: string = '';
+  timesPerDay: number = 1;
+  totalDays: number = 7;
+  remark: string = '';
+}
+
+export class AiPlanProposal {
+  summary: string = '';
+  plans: AiPlanChange[] = [];
+}
+
 class AiResponseMessage {
   content: string = '';
 }
@@ -41,6 +63,43 @@ class AiResponseBody {
 export class AiClient {
   static async chat(baseUrl: string, apiKey: string, model: string,
     history: AiChatMessage[]): Promise<AiChatResult> {
+    const messages: AiChatMessage[] = [];
+    messages.push(new AiChatMessage(
+      'system',
+      '你是学习计划和数据分析学习助手。你只能提供建议、解释和示例，' +
+      '不能声称已经修改用户的计划，也不能直接写入或删除用户数据。' +
+      '如果用户要求修改计划，请提示用户在计划页面手动操作。请使用中文回答。'
+    ));
+    for (let i = 0; i < history.length; i++) {
+      messages.push(history[i]);
+    }
+    return AiClient.request(baseUrl, apiKey, model, messages, 0.7);
+  }
+
+  static async chatForPlan(baseUrl: string, apiKey: string, model: string,
+    history: AiChatMessage[], plans: AiPlanContext[]): Promise<AiChatResult> {
+    const messages: AiChatMessage[] = [];
+    messages.push(new AiChatMessage('system', AiClient.planSystemPrompt(plans)));
+    for (let i = 0; i < history.length; i++) {
+      messages.push(history[i]);
+    }
+    return AiClient.request(baseUrl, apiKey, model, messages, 0.2);
+  }
+
+  static async repairPlan(baseUrl: string, apiKey: string, model: string,
+    rawOutput: string, plans: AiPlanContext[]): Promise<AiChatResult> {
+    const messages: AiChatMessage[] = [];
+    messages.push(new AiChatMessage('system', AiClient.planSystemPrompt(plans)));
+    messages.push(new AiChatMessage(
+      'user',
+      '请把下面的内容转换成指定 JSON。不要解释，不要使用 Markdown：\n' +
+      rawOutput.substring(0, 12000)
+    ));
+    return AiClient.request(baseUrl, apiKey, model, messages, 0.1);
+  }
+
+  private static async request(baseUrl: string, apiKey: string, model: string,
+    messages: AiChatMessage[], temperature: number): Promise<AiChatResult> {
     const result: AiChatResult = new AiChatResult();
     const url: string = AiClient.chatEndpoint(baseUrl);
     if (url.length === 0) {
@@ -56,21 +115,10 @@ export class AiClient {
       return result;
     }
 
-    const messages: AiChatMessage[] = [];
-    messages.push(new AiChatMessage(
-      'system',
-      '你是学习计划和数据分析学习助手。你只能提供建议、解释和示例，' +
-      '不能声称已经修改用户的计划，也不能直接写入或删除用户数据。' +
-      '如果用户要求修改计划，请提示用户在计划页面手动操作。请使用中文回答。'
-    ));
-    for (let i = 0; i < history.length; i++) {
-      messages.push(history[i]);
-    }
-
     const body: string = JSON.stringify({
       model: model,
       messages: messages,
-      temperature: 0.7,
+      temperature: temperature,
       stream: false
     });
 
@@ -99,6 +147,7 @@ export class AiClient {
 
       const parsed: AiResponseBody = JSON.parse(raw) as AiResponseBody;
       if (parsed.choices === undefined || parsed.choices.length === 0
+        || parsed.choices[0].message === undefined
         || parsed.choices[0].message.content.length === 0) {
         result.message = 'AI 没有返回有效内容';
         return result;
@@ -113,6 +162,20 @@ export class AiClient {
     } finally {
       request.destroy();
     }
+  }
+
+  private static planSystemPrompt(plans: AiPlanContext[]): string {
+    return '你是打卡计划编辑助手。根据用户需求制定或修改计划。' +
+      '当前用户已有的计划如下，必须严格使用其中的 planId 修改已有计划：\n' +
+      `${JSON.stringify(plans)}\n` +
+      '只允许两种 action：add 新建计划，update 修改已有计划；禁止删除计划。' +
+      '每次最多返回 10 项，timesPerDay 必须是 1 到 20 的整数，' +
+      'totalDays 必须是 1 到 365 的整数。' +
+      '只返回一个 JSON 对象，不要使用 Markdown，不要添加 JSON 之外的解释。' +
+      'JSON 必须严格符合：' +
+      '{"summary":"简短说明","plans":[{"action":"add","planId":"",' +
+      '"name":"计划名","timesPerDay":1,"totalDays":7,"remark":"备注"}]}。' +
+      'update 时 planId 必须填写当前计划中真实存在的编号；add 时 planId 为空。';
   }
 
   private static chatEndpoint(baseUrl: string): string {

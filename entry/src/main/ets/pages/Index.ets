@@ -8,6 +8,7 @@ import { ApiConfig } from '../common/ApiConfig';
 import { IconPath } from '../common/IconPath';
 import { AppColor } from '../common/Theme';
 import {
+  AiMemoryMessage,
   CheckInRecord,
   ClassMember,
   ClassRoom,
@@ -46,6 +47,7 @@ import {
   CheckInPlanPayload,
   CheckInUploadPayload
 } from '../model/ApiClient';
+import { AiChatMessage, AiPlanChange } from '../model/AiClient';
 import { DakaStore, LoadResult } from '../model/DakaStore';
 import { AIView } from '../view/AIView';
 import { HomeView } from '../view/HomeView';
@@ -95,6 +97,7 @@ struct Index {
   @State aiBaseUrl: string = '';
   @State aiApiKey: string = '';
   @State aiModel: string = '';
+  @State aiMessages: AiMemoryMessage[] = [];
   private remoteRefreshInFlight: boolean = false;
 
   aboutToAppear(): void {
@@ -132,6 +135,7 @@ struct Index {
       } else {
         this.userName = account.nickname;
         this.role = account.role;
+        this.aiMessages = account.aiMessages.slice();
       }
     }
     this.plans = result.data.plans;
@@ -863,6 +867,110 @@ struct Index {
     this.persist();
   }
 
+  private applyAiPlanChanges(changes: AiPlanChange[]): void {
+    const nextPlans: PlanItem[] = this.plans.slice();
+    let nextRecords: CheckInRecord[] = this.records.slice();
+
+    for (let i = 0; i < changes.length; i++) {
+      const change: AiPlanChange = changes[i];
+      if (change.action === 'update') {
+        let targetIndex: number = -1;
+        for (let j = 0; j < nextPlans.length; j++) {
+          if (nextPlans[j].id === change.planId) {
+            targetIndex = j;
+            break;
+          }
+        }
+        if (targetIndex < 0) {
+          continue;
+        }
+
+        const existing: PlanItem = nextPlans[targetIndex];
+        const updated: PlanItem = new PlanItem();
+        updated.id = existing.id;
+        updated.name = change.name;
+        updated.timesPerDay = change.timesPerDay;
+        updated.totalDays = change.totalDays;
+        updated.remark = change.remark;
+        updated.createdAt = existing.createdAt;
+        nextPlans[targetIndex] = updated;
+
+        for (let j = 0; j < nextRecords.length; j++) {
+          if (nextRecords[j].planId === updated.id) {
+            const record: CheckInRecord = nextRecords[j];
+            record.planName = updated.name;
+          }
+        }
+      } else {
+        const added: PlanItem = new PlanItem();
+        added.id = generateId('plan');
+        added.name = change.name;
+        added.timesPerDay = change.timesPerDay;
+        added.totalDays = change.totalDays;
+        added.remark = change.remark;
+        added.createdAt = Date.now();
+        nextPlans.push(added);
+      }
+    }
+
+    this.plans = nextPlans;
+    this.records = nextRecords;
+    this.persist();
+  }
+
+  private aiInitialMessages(): AiChatMessage[] {
+    const messages: AiChatMessage[] = [];
+    for (let i = 0; i < this.aiMessages.length; i++) {
+      messages.push(new AiChatMessage(this.aiMessages[i].role, this.aiMessages[i].content));
+    }
+    return messages;
+  }
+
+  private saveAiMessages(messages: AiChatMessage[]): void {
+    if (this.currentLoginId.length === 0) {
+      return;
+    }
+
+    let accountIndex: number = -1;
+    for (let i = 0; i < this.localAccounts.length; i++) {
+      if (this.localAccounts[i].id === this.currentLoginId) {
+        accountIndex = i;
+        break;
+      }
+    }
+    if (accountIndex < 0) {
+      return;
+    }
+
+    const recent: AiMemoryMessage[] = [];
+    let totalCharacters: number = 0;
+    for (let i = messages.length - 1; i >= 0 && recent.length < 80; i--) {
+      let content: string = messages[i].content;
+      if (content.length === 0) {
+        continue;
+      }
+      if (content.length > 12000) {
+        content = content.substring(0, 12000);
+      }
+      if (totalCharacters + content.length > 100000 && recent.length > 0) {
+        break;
+      }
+      const message: AiMemoryMessage = new AiMemoryMessage();
+      message.role = messages[i].role;
+      message.content = content;
+      message.createdAt = Date.now();
+      recent.push(message);
+      totalCharacters += content.length;
+    }
+    recent.reverse();
+
+    const nextAccounts: LocalAccount[] = this.localAccounts.slice();
+    nextAccounts[accountIndex].aiMessages = recent;
+    this.localAccounts = nextAccounts;
+    this.aiMessages = recent;
+    this.persist();
+  }
+
   // ------------------------------------------------------------------ 我的
 
   private currentAccount(): LocalAccount | undefined {
@@ -979,12 +1087,12 @@ struct Index {
     return account;
   }
 
-  private async registerAccount(nickname: string, role: string): Promise<LocalAccount> {
+  private async registerAccount(nickname: string, role: string, password: string): Promise<LocalAccount> {
     if (!ApiConfig.isConfigured()) {
       return this.registerLocalAccount(nickname, role);
     }
 
-    const result: ApiResult = await ApiClient.registerWithId(nickname, role);
+    const result: ApiResult = await ApiClient.registerWithId(nickname, role, password);
     const session: ApiAuthSession | undefined = this.parseAuthSession(result);
     if (session === undefined) {
       this.toast(this.apiMessage(result));
@@ -1006,13 +1114,14 @@ struct Index {
     this.roleSelected = true;
     this.userName = account.nickname;
     this.role = account.role;
+    this.aiMessages = account.aiMessages.slice();
     this.currentIndex = 0;
   }
 
-  private async loginById(id: string): Promise<boolean> {
+  private async loginById(id: string, password: string): Promise<boolean> {
     const normalized: string = id.trim().toUpperCase();
     if (ApiConfig.isConfigured()) {
-      const result: ApiResult = await ApiClient.loginWithId(normalized);
+      const result: ApiResult = await ApiClient.loginWithId(normalized, password);
       const session: ApiAuthSession | undefined = this.parseAuthSession(result);
       if (session === undefined) {
         this.toast(this.apiMessage(result));
@@ -1047,7 +1156,7 @@ struct Index {
         return true;
       }
     }
-    return this.loginById(id);
+    return false;
   }
 
   private timestampOf(value: string | null | undefined): number {
@@ -1605,6 +1714,7 @@ struct Index {
     this.currentLoginId = '';
     this.serverUserId = '';
     this.authToken = '';
+    this.aiMessages = [];
     this.loggedIn = false;
     this.plans = [];
     this.records = [];
@@ -1630,6 +1740,7 @@ struct Index {
     this.currentLoginId = '';
     this.serverUserId = '';
     this.authToken = '';
+    this.aiMessages = [];
     this.drawerOpen = false;
     this.currentIndex = 0;
     this.persist();
@@ -1796,11 +1907,11 @@ struct Index {
     if (!this.loggedIn) {
       LoginView({
         serverMode: ApiConfig.isConfigured(),
-        onLogin: (id: string) => {
-          return this.loginById(id);
+        onLogin: (id: string, password: string) => {
+          return this.loginById(id, password);
         },
-        onRegister: (nickname: string, role: string) => {
-          return this.registerAccount(nickname, role);
+        onRegister: (nickname: string, role: string, password: string) => {
+          return this.registerAccount(nickname, role, password);
         },
         onEnter: (id: string) => {
           return this.enterRegistered(id);
@@ -1850,7 +1961,16 @@ struct Index {
             AIView({
               baseUrl: $aiBaseUrl,
               apiKey: $aiApiKey,
-              model: $aiModel
+              model: $aiModel,
+              plans: $plans,
+              authToken: this.authToken,
+              initialMessages: this.aiInitialMessages(),
+              onMessagesChanged: (messages: AiChatMessage[]) => {
+                this.saveAiMessages(messages);
+              },
+              onApplyPlanChanges: (changes: AiPlanChange[]) => {
+                this.applyAiPlanChanges(changes);
+              }
             })
           } else if (this.currentIndex === 3) {
             RewardView({

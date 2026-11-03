@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
+  AiMemoryMessage,
   CheckInRecord,
   ClassMember,
   ClassRoom,
@@ -97,6 +98,24 @@ export class DakaStore {
       account.nickname = source.nickname;
       account.role = source.role === undefined ? ROLE_STUDENT : source.role;
       account.createdAt = source.createdAt;
+      const memory: AiMemoryMessage[] = [];
+      const rawMemory: AiMemoryMessage[] =
+        source.aiMessages === undefined ? [] : source.aiMessages;
+      for (let j = 0; j < rawMemory.length && memory.length < 80; j++) {
+        const sourceMessage: AiMemoryMessage = rawMemory[j];
+        if (sourceMessage.content === undefined || sourceMessage.content.length === 0) {
+          continue;
+        }
+        if (sourceMessage.role !== 'user' && sourceMessage.role !== 'assistant') {
+          continue;
+        }
+        const message: AiMemoryMessage = new AiMemoryMessage();
+        message.role = sourceMessage.role;
+        message.content = sourceMessage.content;
+        message.createdAt = sourceMessage.createdAt === undefined ? 0 : sourceMessage.createdAt;
+        memory.push(message);
+      }
+      account.aiMessages = memory;
       accounts.push(account);
     }
     data.localAccounts = accounts;

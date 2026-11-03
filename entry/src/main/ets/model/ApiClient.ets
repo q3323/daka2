@@ -135,16 +135,17 @@ export class ApiPath {
   static readonly classes: string = '/api/classes';
   static readonly joinClass: string = '/api/classes/join';
   static readonly checkIns: string = '/api/check-ins';
+  static readonly normalizePlan: string = '/api/plans/normalize';
 }
 
 export class ApiClient {
-  static async loginWithId(loginId: string): Promise<ApiResult> {
-    const body: string = JSON.stringify({ loginId: loginId });
+  static async loginWithId(loginId: string, password: string): Promise<ApiResult> {
+    const body: string = JSON.stringify({ loginId: loginId, password: password });
     return ApiClient.request(http.RequestMethod.POST, ApiPath.loginId, '', body);
   }
 
-  static async registerWithId(nickname: string, role: string): Promise<ApiResult> {
-    const body: string = JSON.stringify({ nickname: nickname, role: role });
+  static async registerWithId(nickname: string, role: string, password: string): Promise<ApiResult> {
+    const body: string = JSON.stringify({ nickname: nickname, role: role, password: password });
     return ApiClient.request(http.RequestMethod.POST, ApiPath.registerId, '', body);
   }
 
@@ -210,6 +211,12 @@ export class ApiClient {
 
   static async getCheckIns(token: string): Promise<ApiResult> {
     return ApiClient.request(http.RequestMethod.GET, ApiPath.checkIns, token, '');
+  }
+
+  static async normalizeAiPlanProposal(content: string, planIds: string[],
+    token: string): Promise<ApiResult> {
+    const body: string = JSON.stringify({ content: content, planIds: planIds });
+    return ApiClient.request(http.RequestMethod.POST, ApiPath.normalizePlan, token, body);
   }
 
   private static async request(

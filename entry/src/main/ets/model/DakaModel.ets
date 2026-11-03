@@ -9,12 +9,20 @@ export const KIND_CUT: string = 'cut';
 export const ROLE_STUDENT: string = 'student';
 export const ROLE_TEACHER: string = 'teacher';
 
-/** 临时本地账号：ID 是唯一登录凭证。 */
+/** 保存在当前设备上的账号摘要；密码只保存在服务器。 */
 export class LocalAccount {
   id: string = '';
   serverId: string = '';
   nickname: string = '';
   role: string = ROLE_STUDENT;
+  createdAt: number = 0;
+  aiMessages: AiMemoryMessage[] = [];
+}
+
+/** 本机保存的 AI 对话，不写入服务器数据库。 */
+export class AiMemoryMessage {
+  role: string = '';
+  content: string = '';
   createdAt: number = 0;
 }
 
