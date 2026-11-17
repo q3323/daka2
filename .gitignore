@@ -2,10 +2,12 @@
 /oh_modules
 /server/node_modules
 /local.properties
+/build-profile.json5
 /.idea
 **/build
 **/.preview
 /.hvigor
+.pytest_cache
 .cxx
 /.clangd
 /.clang-format

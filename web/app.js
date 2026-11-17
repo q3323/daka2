@@ -1,6 +1,6 @@
 const siteConfig = {
   // 签名包准备好后填写，例如："./downloads/daka.hap"
-  downloadUrl: "",
+  downloadUrl: "./downloads/daka.hap",
   icpNumber: "粤ICP备2026171342号-1"
 };
 
